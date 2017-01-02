@@ -1,0 +1,122 @@
+1.在sql执行语句
+ALTER TABLE `ecs_goods` ADD `sales_volume_base` INT( 10 ) UNSIGNED NOT NULL DEFAULT '0'
+INSERT INTO `ecs_shop_config` (`parent_id`, `code`, `type`, `store_range`, `store_dir`, `value`, `sort_order` ) VALUES ('7','show_goods_sales', 'select', '1,0', '', '1', '1');
+INSERT INTO `ecs_shop_config` (`parent_id`, `code`, `type`, `store_range`, `store_dir`, `value`, `sort_order` ) VALUES ('3', 'show_sales_type', 'select', '1,0', '', '1', '1');
+注意：如果你的数据表前缀不是‘ecs_’ 请自行修改
+
+2./admin/includes/lib_goods.php中
+$sql = "SELECT goods_id, goods_name, goods_type, goods_sn, shop_price, is_on_sale, is_best, is_new, is_hot, sort_order, goods_number, integral, " .
+                    " (promote_price > 0 AND promote_start_date <= '$today' AND promote_end_date >= '$today') AS is_promote ".
+                    " FROM " . $GLOBALS['ecs']->table('goods') . " AS g WHERE is_delete='$is_delete' $where" .
+                    " ORDER BY $filter[sort_by] $filter[sort_order] ".
+                    " LIMIT " . $filter['start'] . ",$filter[page_size]";
+修改为
+$sql = "SELECT goods_id, goods_name, goods_type, goods_sn, shop_price, is_on_sale, is_best, is_new, is_hot, sort_order, goods_number, integral, sales_volume_base, " . 
+        " (promote_price > 0 AND promote_start_date <= '$today' AND promote_end_date >= '$today') AS is_promote ".
+        " FROM " . $GLOBALS['ecs']->table('goods') . " AS g WHERE is_delete='$is_delete' $where" .
+        " ORDER BY $filter[sort_by] $filter[sort_order] ".
+        " LIMIT " . $filter['start'] . ",$filter[page_size]";
+        
+3./admin/templates/goods_list.htm，在
+  {if $use_storage}
+    <th><a href="javascript:listTable.sort('goods_number'); ">{$lang.goods_number}</a>{$sort_goods_number}</th>
+  {/if}
+后，添加
+<th><a href="javascript:listTable.sort('sales_volume_base'); ">{$lang.sales_volume_base}</a>{$sort_sales_volume_base}</th>
+在
+ {if $use_storage}
+    <td align="right"><span onclick="listTable.edit(this, 'edit_goods_number', {$goods.goods_id})">{$goods.goods_number}</span></td>
+ {/if}
+后，添加
+<td align="center"><span onclick="listTable.edit(this, 'edit_sales_volume_base', {$goods.goods_id})">{$goods.sales_volume_base}</span></td>
+
+4./admin/goods.php，在
+/**
+ * 列表链接
+ * @param   bool    $is_add         是否添加（插入）
+ * @param   string  $extension_code 虚拟商品扩展代码，实体商品为空
+ * @return  array('href' => $href, 'text' => $text)
+ */
+function list_link($is_add = true, $extension_code = '')
+前，添加
+/*------------------------------------------------------ */
+//-- 修改商品虚拟销量
+/*------------------------------------------------------ */
+elseif ($_REQUEST['act'] == 'edit_sales_volume_base')
+{
+  check_authz_json('goods_manage');
+ 
+  $goods_id = intval($_POST['id']);
+  $sales_volume_base = json_str_iconv(trim($_POST['val']));
+ 
+  if ($exc->edit("sales_volume_base = '$sales_volume_base', last_update=" .gmtime(), $goods_id))
+  {
+    clear_cache_files();
+    make_json_result(stripslashes($sales_volume_base));
+  }
+}
+
+5.goods.php，在
+$smarty->assign('categories',         get_categories_tree($goods['cat_id']));  // 分类树
+后，添加
+$smarty->assign('sales_count',&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; get_sales_count($goods_id));
+在末尾添加
+/* 商品累计销量带自定义_新增加 */
+function get_sales_count($goods_id)
+{
+  /* 查询该商品的自定义销量 */
+  $sales_base = $GLOBALS['db']->getOne('SELECT sales_volume_base FROM '.$GLOBALS['ecs']->table('goods').' WHERE goods_id = '.$goods_id);
+  /* 查询该商品的实际销量 */
+  $sql = 'SELECT IFNULL(SUM(g.goods_number), 0) ' .
+        'FROM ' . $GLOBALS['ecs']->table('order_info') . ' AS o, ' .
+        $GLOBALS['ecs']->table('order_goods') . ' AS g ' .
+        "WHERE o.order_id = g.order_id " .
+        "AND o.order_status " . db_create_in(array(OS_CONFIRMED, OS_SPLITED)) .
+        "AND o.shipping_status " . db_create_in(array(SS_SHIPPED, SS_RECEIVED)) .
+        " AND o.pay_status " . db_create_in(array(PS_PAYED, PS_PAYING)) .
+        " AND g.goods_id = '$goods_id'";
+  $sales_count = $GLOBALS['db']->getOne($sql);
+  /* 商品累计销量默认显示方式 */
+  if ($GLOBALS['_CFG']['show_sales_type'])
+  {
+    $row['sales_volume_total'] = $sales_count; //实际销量
+  }
+  else
+  {
+    $row['sales_volume_total'] = $sales_base + $sales_count; //自定义销量+实际销量
+  }
+  return ($row['sales_volume_total']);
+}
+
+6.在/languages/zh_cn/admin/shop_config.php，中
+/languages/zh_cn/admin/shop_config.php文档结尾
+下，添加
+$_LANG['cfg_name']['show_goods_sales'] = '是否显示商品累计销量';
+$_LANG['cfg_range']['show_goods_sales']['1'] = '显示';
+$_LANG['cfg_range']['show_goods_sales']['0'] = '不显示';
+$_LANG['cfg_name']['show_sales_type'] = '商品累计销量默认显示方式';
+$_LANG['cfg_range']['show_sales_type'][1] = '真实显示';
+$_LANG['cfg_range']['show_sales_type'][0] = '虚拟显示';
+
+7./languages/zh_cn/admin/goods.php，中
+$_LANG['goods_sn_exists'] = '您输入的货号已存在，请换一个';
+后，添加
+$_LANG['sales_volume_base'] = '虚拟销量';
+
+8./languages/zh_cn/common.php，中
+$_LANG['divided_into'] = '分成规则';
+后，添加
+$_LANG['sales_volume_total'] = '累计销量：'; 
+$_LANG['pcs'] = '件';
+
+9./themes/default/goods.dwt，在
+     <img src="images/stars{$goods.comment_rank}.gif" alt="comment rank {$goods.comment_rank}" />
+   </dd>
+后，添加(这个是前台显示的销量文字，依模板自行插入)
+{if $cfg.show_goods_sales}
+<dd style="width:48%; padding-left:0px;">
+<strong>{$lang.sales_volume_total}</strong>
+<font class="shop">{$sales_count}{if $goods.measure_unit}{$goods.measure_unit}{else}{$lang.pcs}{/if}</font>
+</dd>
+{/if}
+OK，完成！
